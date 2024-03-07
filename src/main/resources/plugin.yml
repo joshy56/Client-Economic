@@ -1,0 +1,8 @@
+main: io.github.joshy56.ClientEconomic
+name: Economic
+version: 0
+commands:
+  economic:
+    aliases:
+      - eco
+    description: "Mainly command of economic plugin."
