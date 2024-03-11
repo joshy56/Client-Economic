@@ -108,6 +108,10 @@
                             <pattern>com.zaxxer.hikari</pattern>
                             <shadedPattern>io.github.joshy56.hikari</shadedPattern>
                         </relocation>
+                        <relocation>
+                            <pattern>com.google</pattern>
+                            <shadedPattern>io.github.joshy56.guava</shadedPattern>
+                        </relocation>
                     </relocations>
                 </configuration>
                 <executions>

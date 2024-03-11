@@ -2,29 +2,18 @@ package io.github.joshy56.transaction;
 
 import co.aikar.idb.Database;
 import co.aikar.idb.DbRow;
-import co.aikar.idb.DbStatement;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
 import io.github.joshy56.AbstractCachedRepository;
-import io.github.joshy56.Economic;
 import io.github.joshy56.Namespace;
-import io.github.joshy56.currency.Currency;
-import io.github.joshy56.currency.CurrencyRepository;
 import io.github.joshy56.response.Response;
 import io.github.joshy56.response.ResponseCode;
-import io.github.joshy56.subject.Subject;
-import io.github.joshy56.subject.SubjectRepository;
-import io.github.joshy56.transaction.Transaction;
-import io.github.joshy56.transaction.TransactionRepository;
-import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 /**
@@ -34,43 +23,22 @@ import java.util.stream.Collectors;
 public class SimpleTransactionRepository extends AbstractCachedRepository<Namespace, Transaction> implements TransactionRepository {
     // Manejar las transacciones a la base de datos desde aqui, el cache.
     // Sera necesaria que una conexion sea inyectada por el constructor.
-    private final LoadingCache<String, Double> transactionCache;
-    private final Economic economic;
-    private final Database db;
 
-    public SimpleTransactionRepository(Economic economic, JavaPlugin plugin, Database database) {
-        super(CacheBuilder.newBuilder().expireAfterAccess(3, TimeUnit.MINUTES).expireAfterWrite(1, TimeUnit.MINUTES).build(
+    public SimpleTransactionRepository(Database database) {
+        super(database, CacheBuilder.newBuilder().expireAfterAccess(3, TimeUnit.MINUTES).expireAfterWrite(1, TimeUnit.MINUTES).build(
                 new CacheLoader<>() {
                     @Override
-                    public Transaction load(Namespace namespace) throws Exception {
-                        DbRow row = database.getFirstRow("SELECT amount FROM transactions WHERE subjectId=? AND currencyName=?", namespace.key(), namespace.name());
-                        return new Transaction(namespace.name(), UUID.fromString(namespace.key()), row.getDbl("amount"));
+                    public @NotNull Transaction load(@NotNull Namespace namespace) throws Exception {
+                        DbRow dbRow = database.getFirstRow("SELECT subjectId, currencyName, amount FROM transactions WHERE subjectId=? AND currencyName=?;", namespace.key(), namespace.name());
+                        return Optional.ofNullable(dbRow)
+                                .map(row -> {
+                                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
+                                    double amount = row.getDbl("amount", 0);
+                                    return new Transaction(namespace.name(), subjectId, amount);
+                                }).orElseThrow(() -> new NullPointerException("Transaction don't exists."));
                     }
                 }
         ));
-        this.economic = economic;
-        this.db = database;
-        transactionCache = CacheBuilder.newBuilder().expireAfterAccess(3, TimeUnit.MINUTES).expireAfterWrite(1, TimeUnit.MINUTES).build(
-                new CacheLoader<>() {
-                    @Override
-                    public Double load(String key) throws Exception {
-                        String[] keypair = key.split(":");
-                        UUID.fromString(keypair[0]);
-                        DbRow row = db.getFirstRow("SELECT amount FROM transaction WHERE subjectId=?, currencyName=?;", keypair[0], keypair[1]);
-                        return row.getDbl("amount");
-                    }
-                }
-        );
-    }
-
-    @Override
-    public Response<Transaction> get(UUID subjectIdentifier, String currencyName) {
-        try {
-            double amount = transactionCache.get(subjectIdentifier.toString().concat(":").concat(currencyName.toLowerCase()));
-            return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(new Transaction(currencyName, subjectIdentifier, amount)));
-        } catch (ExecutionException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
     }
 
     /**
@@ -88,188 +56,208 @@ public class SimpleTransactionRepository extends AbstractCachedRepository<Namesp
     }
 
     /**
-     * @param set
+     * @param namespaces
      * @return
      */
     @Override
-    public @NotNull Response<Set<Transaction>> getAllOfThem(@NotNull Set<Namespace> set) {
-        return query(db, (BiFunction<DbStatement, LoadingCache<Namespace, Transaction>, Response<Set<Transaction>>>) (dbStatement, namespaceTransactionLoadingCache) -> {
+    public @NotNull Response<Set<Transaction>> getAllOfThem(@NotNull Set<Namespace> namespaces) {
+        if (namespaces.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+        return query(statement -> {
             try {
-                dbStatement.query("");
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
+                statement.query("BEGIN TRANSACTION;");
+                statement.execute();
+                for (Namespace namespace : namespaces) {
+                    statement.query("SELECT subjectId, currencyName, amount FROM transactions WHERE subjectId=? AND currencyName=?;");
+                    statement.execute(namespace.key(), namespace.name());
+                }
+                statement.query("COMMIT;");
+                statement.execute();
+
+                statement.commit();
+
+                Set<Transaction> transactions = statement.getResults().parallelStream().map(row -> {
+                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
+                    String currencyName = row.getString("currencyName");
+                    double amount = row.getDbl("amount", 0);
+                    return new Transaction(currencyName, subjectId, amount);
+                }).collect(Collectors.toSet());
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.ofNullable(transactions.isEmpty() ? null : transactions));
+            } catch (SQLException ok) {
+                return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException("", ok)), Optional.empty());
             }
         });
     }
 
     @Override
-    public Response<Set<Transaction>> getAll() {
-        try (DbStatement statement = db.query("SELECT subjectId, currencyName, amount FROM transaction;")) {
-            Set<Transaction> transactions = statement.getResults().parallelStream().map(row -> {
-                UUID subjectId = UUID.fromString(row.getString("subjectId"));
-                return new Transaction(row.getString("currencyName"), subjectId, row.getDbl("amount"));
-            }).collect(Collectors.toSet());
-            if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
-            return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(transactions));
-        } catch (SQLException | IllegalArgumentException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
-    }
-
-    @Override
-    public Response<Set<Transaction>> getAllOfSubject(UUID subjectId) {
-        try (DbStatement statement = db.query("SELECT currencyName, amount FROM transaction WHERE subjectId=?;")) {
-            Set<Transaction> transactions = statement.execute(subjectId.toString()).getResults().parallelStream().map(row -> new Transaction(row.getString("currencyName"), subjectId, row.getDbl("amount"))).collect(Collectors.toSet());
-            if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
-            return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(transactions));
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
-    }
-
-    @Override
-    public Response<Set<Transaction>> getAllOfCurrency(String currencyName) {
-        try (DbStatement statement = db.query("SELECT subjectId, amount FROM transaction WHERE currencyName=?;")) {
-            Set<Transaction> transactions = statement.execute(currencyName).getResults().parallelStream().map(row -> {
-                UUID subjectId = UUID.fromString(row.getString("subjectId"));
-                return new Transaction(currencyName, subjectId, row.getDbl("amount"));
-            }).collect(Collectors.toSet());
-            if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
-            return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(transactions));
-        } catch (SQLException | IllegalArgumentException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
-    }
-
-    @Override
-    public Response<Void> delete(Namespace namespace) {
-        try (DbStatement statement = db.createStatement()) {
+    public @NotNull Response<Set<Transaction>> getAll() {
+        return query(statement -> {
             try {
-                statement.startTransaction();
-                if (!statement.inTransaction())
-                    return new Response<>(ResponseCode.ERROR, Optional.of(new IllegalStateException("Currency delete operation require transaction.")), Optional.empty());
+                statement.query("SELECT subjectId, currencyName, amount FROM transactions;");
+                statement.execute();
 
-                statement.executeUpdateQuery("DELETE FROM transaction WHERE subjectId=? AND currencyName=?;", namespace.key(), namespace.name());
                 statement.commit();
 
-                transactionCache.invalidate(namespace.join());
-                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+                Set<Transaction> transactions = statement.getResults().parallelStream().map(row -> {
+                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
+                    String currencyName = row.getString("currencyName");
+                    double amount = row.getDbl("amount", 0);
+                    return new Transaction(currencyName, subjectId, amount);
+                }).collect(Collectors.toSet());
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.ofNullable(transactions.isEmpty() ? null : transactions));
             } catch (SQLException ok) {
-                statement.rollback();
                 return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
             }
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
+        });
     }
 
     @Override
-    public Response<Void> deleteAllOfThem(Set<Namespace> transactions) {
-        if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
-        try (DbStatement statement = db.createStatement()) {
+    public @NotNull Response<Set<Transaction>> getAllOfSubject(@NotNull UUID subjectId) {
+        return query(statement -> {
             try {
-                statement.startTransaction();
-                if (!statement.inTransaction())
-                    return new Response<>(ResponseCode.ERROR, Optional.of(new IllegalStateException("Currency delete operation require transaction.")), Optional.empty());
+                statement.query("SELECT subjectId, currencyName, amount FROM transactions WHERE subjectId=?;");
+                statement.execute(subjectId);
 
-                Set<String> keys = new HashSet<>(transactions.size());
-                for (Transaction transaction : transactions) {
-                    statement.executeUpdateQuery("DELETE FROM transaction WHERE subjectId=? AND currencyName=?", transaction.subjectIdentifier().toString(), transaction.currencyName());
-                    keys.add(transaction.subjectIdentifier().toString().concat(":").concat(transaction.currencyName()));
+                statement.commit();
+
+                Set<Transaction> transactions = statement.getResults().parallelStream().map(row -> {
+                    String currencyName = row.getString("currencyName");
+                    double amount = row.getDbl("amount", 0);
+                    return new Transaction(currencyName, subjectId, amount);
+                }).collect(Collectors.toSet());
+                if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(transactions));
+            } catch (SQLException ok) {
+                return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException("Palta, why not?", ok)), Optional.empty());
+            }
+        });
+    }
+
+    @Override
+    public @NotNull Response<Set<Transaction>> getAllOfCurrency(@NotNull String currencyName) {
+        return query(statement -> {
+            try {
+                statement.query("SELECT subjectId, currencyName, amount FROM transactions WHERE currencyName=?;");
+                statement.execute(currencyName);
+
+                statement.commit();
+
+                Set<Transaction> transactions = statement.getResults().parallelStream().map(row -> {
+                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
+                    double amount = row.getDbl("amount", 0);
+                    return new Transaction(currencyName, subjectId, amount);
+                }).collect(Collectors.toSet());
+                if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(transactions));
+            } catch (SQLException ok) {
+                return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException("Changoos.", ok)), Optional.empty());
+            }
+        });
+    }
+
+    @Override
+    public @NotNull Response<Void> delete(@NotNull Namespace namespace) {
+        return query(statement -> {
+            try {
+                cache().invalidate(namespace);
+                statement.query("DELETE FROM transactions WHERE subjectId=? AND currencyName=?;");
+                statement.execute(namespace.key(), namespace.name());
+
+                statement.commit();
+
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+            } catch (SQLException ok) {
+                return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
+            }
+        });
+    }
+
+    @Override
+    public @NotNull Response<Void> deleteAllOfThem(@NotNull Set<Namespace> namespaces) {
+        return query(statement -> {
+            try {
+                cache().invalidateAll(namespaces);
+                statement.query("BEGIN TRANSACTION;");
+                statement.execute();
+                for (Namespace namespace : namespaces) {
+                    statement.query("DELETE FROM transactions WHERE subjectId=? AND currencyName=?;");
+                    statement.execute(namespace.key(), namespace.name());
                 }
+                statement.query("COMMIT;");
+                statement.execute();
+
                 statement.commit();
 
-                transactionCache.invalidateAll(keys);
-                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(true));
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
             } catch (SQLException ok) {
-                statement.rollback();
-                return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.of(false));
+                return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
             }
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.of(false));
-        }
+        });
     }
 
     @Override
-    public Response<Void> deleteAll() {
-        try (DbStatement statement = db.createStatement()) {
+    public @NotNull Response<Void> deleteAll() {
+        return query(statement -> {
             try {
-                statement.startTransaction();
-                if (!statement.inTransaction())
-                    return new Response<>(ResponseCode.ERROR, Optional.of(new IllegalStateException("Currency delete operation require transaction.")), Optional.empty());
+                cache().invalidateAll();
+                statement.query("DELETE FROM transactions;");
+                statement.execute();
 
-                statement.executeUpdateQuery("DELETE FROM transaction;");
                 statement.commit();
 
-                transactionCache.invalidateAll();
                 return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
             } catch (SQLException ok) {
-                statement.rollback();
                 return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
             }
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
+        });
     }
 
     @Override
-    public Response<Void> set(Transaction transaction) {
-        try (DbStatement statement = db.createStatement()) {
+    public @NotNull Response<Void> set(@NotNull Transaction transaction) {
+        return query(statement -> {
             try {
-                statement.startTransaction();
-                if (!statement.inTransaction())
-                    return new Response<>(ResponseCode.ERROR, Optional.of(new IllegalStateException("Currency set operation requiere transaction.")), Optional.empty());
+                statement.query("INSERT INTO transactions(subjectId, currencyName, amount) VALUES(?, ?, ?) ON CONFLICT(subjectId, currencyName) DO UPDATE SET amount=?;");
+                statement.execute(transaction.subjectIdentifier(), transaction.currencyName(), transaction.amount(), transaction.amount());
 
-                statement.executeUpdateQuery("INSERT INTO transaction(subjectId, currencyName, amount) VALUES(?, ?, ?) ON CONFLICT(subjectId, currencyName) DO UPDATE SET amount=?;", transaction.subjectIdentifier().toString(), transaction.currencyName(), transaction.amount(), transaction.amount());
                 statement.commit();
 
-                String key = transaction.subjectIdentifier().toString().concat(":").concat(transaction.currencyName());
-                if(transactionCache.getIfPresent(key) != null) transactionCache.put(key, transaction.amount());
+                Namespace namespace = new Namespace(transaction.subjectIdentifier().toString(), transaction.currencyName());
+                if (cache().getIfPresent(namespace) != null) cache().put(namespace, transaction);
                 return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
             } catch (SQLException ok) {
-                statement.rollback();
                 return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
             }
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
-        }
+        });
     }
 
     /**
-     * @param set
+     * @param transactions
      * @return
      */
     @Override
-    public @NotNull Response<Void> setAll(@NotNull Set<Transaction> set) {
-        return null;
-    }
-
-    @Override
-    public Response<Boolean> setThey(Set<Transaction> transactions) {
-        if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(true));
-        try (DbStatement statement = db.createStatement()) {
+    public @NotNull Response<Void> setAll(@NotNull Set<Transaction> transactions) {
+        if (transactions.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+        return query(statement -> {
             try {
-                statement.startTransaction();
-                if (!statement.inTransaction())
-                    return new Response<>(ResponseCode.ERROR, Optional.of(new IllegalStateException("Currency set operation require transaction.")), Optional.of(false));
-
-                Map<String, Double> keys = new HashMap<>((int) ((transactionCache.size() + transactions.size()) / 2));
-                String key;
+                Map<Namespace, Transaction> replacement = new HashMap<>(transactions.size());
+                Namespace namespace;
+                statement.query("BEGIN TRANSACTION;");
+                statement.execute();
                 for (Transaction transaction : transactions) {
-                    statement.executeUpdateQuery("INSERT INTO transaction(subjectId, currencyName, amount) VALUE(?, ?, ?) ON CONFLICT(subjectId, currencyName) DO UPDATE SET amount=?;", transaction.subjectIdentifier().toString(), transaction.currencyName(), transaction.amount(), transaction.amount());
-                    key = transaction.subjectIdentifier().toString().concat(":").concat(transaction.currencyName());
-                    if(transactionCache.getIfPresent(key) != null) keys.put(key, transaction.amount());
+                    statement.query("INSERT INTO transactions(subjectId, currencyName, amount) VALUES(?, ?, ?) ON CONFLICT(subjectId, currencyName) DO UPDATE SET amount=?;");
+                    statement.execute(transaction.subjectIdentifier(), transaction.currencyName(), transaction.amount(), transaction.amount());
+                    namespace = new Namespace(transaction.subjectIdentifier().toString(), transaction.currencyName());
+                    if (cache().getIfPresent(namespace) != null) replacement.put(namespace, transaction);
                 }
+                statement.query("COMMIT;");
+                statement.execute();
+
                 statement.commit();
 
-                transactionCache.putAll(keys);
-                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(true));
+                cache().putAll(replacement);
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
             } catch (SQLException ok) {
-                statement.rollback();
-                return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.of(false));
+                return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.empty());
             }
-        } catch (SQLException ok) {
-            return new Response<>(ResponseCode.ERROR, Optional.of(ok), Optional.of(false));
-        }
+        });
     }
 }

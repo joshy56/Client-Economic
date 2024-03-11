@@ -1,52 +1,62 @@
-package io.github.joshy56.subject;
+package io.github.joshy56.currency;
 
 import co.aikar.idb.Database;
 import co.aikar.idb.DbRow;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import io.github.joshy56.AbstractCachedRepository;
 import io.github.joshy56.response.Response;
 import io.github.joshy56.response.ResponseCode;
+import org.intellij.lang.annotations.Language;
 import org.jetbrains.annotations.NotNull;
 
 import java.sql.SQLException;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
  * @author joshy56
- * @since 3/3/2024
+ * @since 10/3/2024
  */
-public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subject> implements SubjectRepository {
-    public SimpleSubjectRepository(Database database) {
+public class SimpleCurrencyRepository extends AbstractCachedRepository<String, Currency> implements CurrencyRepository {
+    @Language("SQL")
+    private final String sqlQueryGet, sqlQuerySet, sqlQueryDelete;
+    public SimpleCurrencyRepository(@NotNull Database database, @NotNull LoadingCache<String, Currency> cache) {
         super(database, CacheBuilder.newBuilder().expireAfterAccess(3, TimeUnit.MINUTES).expireAfterWrite(1, TimeUnit.MINUTES).build(
                 new CacheLoader<>() {
                     @Override
-                    public Subject load(UUID subjectId) throws Exception {
-                        DbRow dbRow = database.getFirstRow("SELECT subjectId, nickname FROM subjects WHERE subjectId=?;", subjectId);
+                    public @NotNull Currency load(@NotNull String currencyName) throws Exception {
+                        DbRow dbRow = database.getFirstRow("SELECT name, displayName, pluralName, abbreviation, symbol FROM currencies WHERE name=?;", currencyName);
                         return Optional.ofNullable(dbRow)
                                 .map(row -> {
-                                    Subject subject = new SimpleSubject(subjectId);
-                                    subject.nickname(row.getString("nickname"));
-                                    return subject;
+                                    Currency currency = new SimpleCurrency(row.getString("name"));
+                                    currency.displayName(row.getString("displayName"));
+                                    currency.displayNamePlural(row.getString("pluralName"));
+                                    currency.abbreviation(row.getString("abbreviation"));
+                                    currency.symbol(row.get("symbol"));
+                                    return currency;
                                 }).orElseThrow(() -> new NullPointerException("Subject don't exists."));
                     }
                 }
         ));
+
+        this.sqlQueryGet = "SELECT name, displayName, pluralName, abbreviation, symbol FROM currencies WHERE name=?;";
+        this.sqlQuerySet = "INSERT INTO currencies(name, displayName, pluralName, abbreviation, symbol) VALUES(?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET displayName=?, pluralName=?, abbreviation=?, symbol=?;";
+        this.sqlQueryDelete = "DELETE FROM currencies WHERE name=?;";
     }
 
     /**
-     * @param subjectId
+     * @param currencyName
      * @return
      */
     @Override
-    public @NotNull Response<Subject> get(@NotNull UUID subjectId) {
+    public @NotNull Response<Currency> get(@NotNull String currencyName) {
         try {
-            Subject subject = cache().get(subjectId);
+            Currency subject = cache().get(currencyName);
             return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(subject));
         } catch (ExecutionException ok) {
             return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException("Something got wrong, ups.", ok)), Optional.empty());
@@ -54,30 +64,32 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     }
 
     /**
-     * @param subjectsIds
+     * @param currenciesNames
      * @return
      */
     @Override
-    public @NotNull Response<Set<Subject>> getAllOfThem(@NotNull Set<UUID> subjectsIds) {
-        if (subjectsIds.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+    public @NotNull Response<Set<Currency>> getAllOfThem(@NotNull Set<String> currenciesNames) {
+        if (currenciesNames.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
                 statement.execute();
-                for (UUID subjectId : subjectsIds) {
-                    statement.query("SELECT subjectId, nickname FROM subjects WHERE subjectId=?;");
-                    statement.execute(subjectId);
+                for (String currencyName : currenciesNames) {
+                    statement.query(sqlQueryGet);
+                    statement.execute(currencyName);
                 }
                 statement.query("COMMIT;");
                 statement.execute();
 
                 statement.commit();
 
-                Set<Subject> subjects = statement.getResults().parallelStream().map(row -> {
-                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
-                    Subject subject = new SimpleSubject(subjectId);
-                    subject.nickname(row.getString("nickname"));
-                    return subject;
+                Set<Currency> subjects = statement.getResults().parallelStream().map(row -> {
+                    Currency currency = new SimpleCurrency(row.getString("name"));
+                    currency.displayName(row.getString("displayName"));
+                    currency.displayNamePlural(row.getString("pluralName"));
+                    currency.abbreviation(row.getString("abbreviation"));
+                    currency.symbol(row.get("symbol"));
+                    return currency;
                 }).collect(Collectors.toSet());
                 if (subjects.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
                 return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(subjects));
@@ -91,22 +103,24 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
      * @return
      */
     @Override
-    public @NotNull Response<Set<Subject>> getAll() {
+    public @NotNull Response<Set<Currency>> getAll() {
         return query(statement -> {
             try {
-                statement.query("SELECT * FROM subjects;");
+                statement.query("SELECT * FROM currencies;");
                 statement.execute();
 
                 statement.commit();
 
-                Set<Subject> subjects = statement.getResults().parallelStream().map(row -> {
-                    UUID subjectId = UUID.fromString(row.getString("subjectId"));
-                    Subject subject = new SimpleSubject(subjectId);
-                    subject.nickname(row.getString("nickname"));
-                    return subject;
+                Set<Currency> currencies = statement.getResults().parallelStream().map(row -> {
+                    Currency currency = new SimpleCurrency(row.getString("name"));
+                    currency.displayName(row.getString("displayName"));
+                    currency.displayNamePlural(row.getString("pluralName"));
+                    currency.abbreviation(row.getString("abbreviation"));
+                    currency.symbol(row.get("symbol"));
+                    return currency;
                 }).collect(Collectors.toSet());
-                if (subjects.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
-                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(subjects));
+                if (currencies.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+                return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(currencies));
             } catch (SQLException ok) {
                 return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException("Something got wrong, ups.", ok)), Optional.empty());
             }
@@ -114,15 +128,15 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     }
 
     /**
-     * @param subject
+     * @param currency
      * @return
      */
     @Override
-    public @NotNull Response<Void> set(@NotNull Subject subject) {
+    public @NotNull Response<Void> set(@NotNull Currency currency) {
         return query(statement -> {
             try {
-                statement.query("INSERT INTO subjects(subjectId, nickname) VALUES(?, ?) ON CONFLICT(subjectId) DO UPDATE SET nickname=?;");
-                statement.execute(subject.identifer(), subject.nickname(), subject.nickname());
+                statement.query(sqlQuerySet);
+                statement.execute(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
 
                 statement.commit();
 
@@ -134,19 +148,19 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     }
 
     /**
-     * @param subjects
+     * @param currencies
      * @return
      */
     @Override
-    public @NotNull Response<Void> setAll(@NotNull Set<Subject> subjects) {
-        if (subjects.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
+    public @NotNull Response<Void> setAll(@NotNull Set<Currency> currencies) {
+        if (currencies.isEmpty()) return new Response<>(ResponseCode.OK, Optional.empty(), Optional.empty());
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
                 statement.execute();
-                for (Subject subject : subjects) {
-                    statement.query("INSERT INTO subjects(subjectId, nickname) VALUES(?, ?) ON CONFLICT(subjectId) DO UPDATE SET nickname=?;");
-                    statement.execute(subject.identifer(), subject.nickname(), subject.nickname());
+                for (Currency currency : currencies) {
+                    statement.query(sqlQuerySet);
+                    statement.execute(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
                 }
                 statement.query("COMMIT;");
                 statement.execute();
@@ -161,15 +175,15 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     }
 
     /**
-     * @param subjectId
+     * @param currencyName
      * @return
      */
     @Override
-    public @NotNull Response<Void> delete(@NotNull UUID subjectId) {
+    public @NotNull Response<Void> delete(@NotNull String currencyName) {
         return query(statement -> {
             try {
-                statement.query("DELETE FROM subjects WHERE subjectId=?;");
-                statement.execute(subjectId);
+                statement.query(sqlQueryDelete);
+                statement.execute(currencyName);
 
                 statement.commit();
 
@@ -181,18 +195,18 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     }
 
     /**
-     * @param subjectsIds
+     * @param currenciesNames
      * @return
      */
     @Override
-    public @NotNull Response<Void> deleteAllOfThem(@NotNull Set<UUID> subjectsIds) {
+    public @NotNull Response<Void> deleteAllOfThem(@NotNull Set<String> currenciesNames) {
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
                 statement.execute();
-                for (UUID subjectId : subjectsIds) {
-                    statement.query("DELETE FROM subjects WHERE subjectId=?;");
-                    statement.execute(subjectId);
+                for (String currencyName : currenciesNames) {
+                    statement.query(sqlQueryDelete);
+                    statement.execute(currencyName);
                 }
                 statement.query("COMMIT;");
                 statement.execute();
@@ -213,7 +227,7 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
     public @NotNull Response<Void> deleteAll() {
         return query(statement -> {
             try {
-                statement.query("DELETE FROM subjects;");
+                statement.query("DELETE FROM currencies;");
                 statement.execute();
 
                 statement.commit();

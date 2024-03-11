@@ -1,15 +1,12 @@
 package io.github.joshy56.transaction;
 
 import io.github.joshy56.Economic;
-import io.github.joshy56.currency.Currency;
+import io.github.joshy56.currency.SimpleCurrency;
 import io.github.joshy56.currency.CurrencyRepository;
 import io.github.joshy56.response.Response;
 import io.github.joshy56.response.ResponseCode;
 import io.github.joshy56.subject.Subject;
 import io.github.joshy56.subject.SubjectRepository;
-import io.github.joshy56.transaction.Transaction;
-import io.github.joshy56.transaction.TransactionHandler;
-import io.github.joshy56.transaction.TransactionRepository;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Optional;
@@ -86,12 +83,12 @@ public class SimpleTransactionHandler implements TransactionHandler {
     }
 
     @Override
-    public Response<Set<Currency>> currenciesOf(UUID subjectId) {
+    public Response<Set<SimpleCurrency>> currenciesOf(UUID subjectId) {
         try {
             TransactionRepository transactionRepository = economic.transactions().getOrThrow();
             CurrencyRepository currencyRepository = economic.currencies().getOrThrow();
             Set<String> currenciesNames = transactionRepository.getAllOfSubject(subjectId).getOrThrow().parallelStream().map(Transaction::currencyName).collect(Collectors.toSet());
-            Set<Currency> currencies = currencyRepository.getThey(currenciesNames).getOrThrow();
+            Set<SimpleCurrency> currencies = currencyRepository.getThey(currenciesNames).getOrThrow();
             return new Response<>(ResponseCode.OK, Optional.empty(), Optional.of(currencies));
         } catch (Throwable ok) {
             return new Response<>(ResponseCode.ERROR, Optional.of(new RuntimeException(String.format("Can't get currencies of user with id: '%s'", subjectId.toString()), ok)), Optional.empty());
