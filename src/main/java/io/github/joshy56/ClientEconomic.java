@@ -1,11 +1,13 @@
 package io.github.joshy56;
 
+import co.aikar.commands.PaperCommandManager;
 import co.aikar.idb.BaseDatabase;
 import co.aikar.idb.DB;
 import co.aikar.idb.Database;
 import co.aikar.idb.DatabaseOptions;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheBuilderSpec;
+import io.github.joshy56.transaction.TransactionRepository;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -22,6 +24,8 @@ public class ClientEconomic extends JavaPlugin {
     @Override
     public void onEnable() {
         database = new BaseDatabase(DatabaseOptions.builder().sqlite("").build());
-
+        getServer().getServicesManager().getRegistration(TransactionRepository.class);
+        PaperCommandManager commandManager = new PaperCommandManager(this);
+        commandManager.enableUnstableAPI("brigadier");
     }
 }

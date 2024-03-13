@@ -37,6 +37,19 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
                     }
                 }
         ));
+
+        query(statement -> {
+            try {
+                statement.query("CREATE TABLE IF NOT EXISTS subjects(subjectId VARCHAR(36) PRIMARY KEY NOT NULL, nickname VARCHAR(64));");
+                statement.executeUpdate();
+
+                statement.commit();
+
+                return Response.EMPTY();
+            } catch (SQLException ok) {
+                return Response.ERROR(ok);
+            }
+        });
     }
 
     /**
@@ -63,13 +76,13 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (UUID subjectId : subjectsIds) {
                     statement.query("SELECT subjectId, nickname FROM subjects WHERE subjectId=?;");
                     statement.execute(subjectId);
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -122,7 +135,7 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("INSERT INTO subjects(subjectId, nickname) VALUES(?, ?) ON CONFLICT(subjectId) DO UPDATE SET nickname=?;");
-                statement.execute(subject.identifer(), subject.nickname(), subject.nickname());
+                statement.executeUpdate(subject.identifer(), subject.nickname(), subject.nickname());
 
                 statement.commit();
 
@@ -143,13 +156,13 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (Subject subject : subjects) {
                     statement.query("INSERT INTO subjects(subjectId, nickname) VALUES(?, ?) ON CONFLICT(subjectId) DO UPDATE SET nickname=?;");
-                    statement.execute(subject.identifer(), subject.nickname(), subject.nickname());
+                    statement.executeUpdate(subject.identifer(), subject.nickname(), subject.nickname());
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -169,7 +182,7 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("DELETE FROM subjects WHERE subjectId=?;");
-                statement.execute(subjectId);
+                statement.executeUpdate(subjectId);
 
                 statement.commit();
 
@@ -189,13 +202,13 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (UUID subjectId : subjectsIds) {
                     statement.query("DELETE FROM subjects WHERE subjectId=?;");
-                    statement.execute(subjectId);
+                    statement.executeUpdate(subjectId);
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -214,7 +227,7 @@ public class SimpleSubjectRepository extends AbstractCachedRepository<UUID, Subj
         return query(statement -> {
             try {
                 statement.query("DELETE FROM subjects;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 

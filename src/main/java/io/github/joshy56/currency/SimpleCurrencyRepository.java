@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
 public class SimpleCurrencyRepository extends AbstractCachedRepository<String, Currency> implements CurrencyRepository {
     @Language("SQL")
     private final String sqlQueryGet, sqlQuerySet, sqlQueryDelete;
-    public SimpleCurrencyRepository(@NotNull Database database, @NotNull LoadingCache<String, Currency> cache) {
+    public SimpleCurrencyRepository(@NotNull Database database) {
         super(database, CacheBuilder.newBuilder().expireAfterAccess(3, TimeUnit.MINUTES).expireAfterWrite(1, TimeUnit.MINUTES).build(
                 new CacheLoader<>() {
                     @Override
@@ -43,6 +43,19 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
                     }
                 }
         ));
+
+        query(statement -> {
+           try {
+               statement.query("CREATE TABLE IF NOT EXISTS currencies(name VARCHAR(64) PRIMARY KEY NOT NULL, displayName VARCHAR(64), pluralName VARCHAR(64), abbreviation VARCHAR(3), symbol CHARACTER(1));");
+               statement.executeUpdate();
+
+               statement.commit();
+
+               return Response.EMPTY();
+           } catch (SQLException ok) {
+               return Response.ERROR(ok);
+           }
+        });
 
         this.sqlQueryGet = "SELECT name, displayName, pluralName, abbreviation, symbol FROM currencies WHERE name=?;";
         this.sqlQuerySet = "INSERT INTO currencies(name, displayName, pluralName, abbreviation, symbol) VALUES(?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET displayName=?, pluralName=?, abbreviation=?, symbol=?;";
@@ -73,13 +86,13 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (String currencyName : currenciesNames) {
                     statement.query(sqlQueryGet);
                     statement.execute(currencyName);
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -107,7 +120,7 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query("SELECT * FROM currencies;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -136,7 +149,7 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query(sqlQuerySet);
-                statement.execute(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
+                statement.executeUpdate(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
 
                 statement.commit();
 
@@ -157,13 +170,13 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (Currency currency : currencies) {
                     statement.query(sqlQuerySet);
-                    statement.execute(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
+                    statement.executeUpdate(currency.name(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol(), currency.displayName(), currency.displayNamePlural(), currency.abbreviation(), currency.symbol());
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -183,7 +196,7 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query(sqlQueryDelete);
-                statement.execute(currencyName);
+                statement.executeUpdate(currencyName);
 
                 statement.commit();
 
@@ -203,13 +216,13 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query("BEGIN TRANSACTION;");
-                statement.execute();
+                statement.executeUpdate();
                 for (String currencyName : currenciesNames) {
                     statement.query(sqlQueryDelete);
-                    statement.execute(currencyName);
+                    statement.executeUpdate(currencyName);
                 }
                 statement.query("COMMIT;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
@@ -228,7 +241,7 @@ public class SimpleCurrencyRepository extends AbstractCachedRepository<String, C
         return query(statement -> {
             try {
                 statement.query("DELETE FROM currencies;");
-                statement.execute();
+                statement.executeUpdate();
 
                 statement.commit();
 
